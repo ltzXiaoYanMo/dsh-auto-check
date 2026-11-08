@@ -1,6 +1,7 @@
 window.__ModuleLoader__.load({
   id: "dsh-auto-check",
   factory: (require) => {
+    const React = require("react");
     const { jsx, jsxs } = require("react/jsx-runtime");
     const {
       SettingsForm,
@@ -21,6 +22,10 @@ window.__ModuleLoader__.load({
       ".dshAutoCheckInput{background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;min-height:32px;padding:4px 8px;width:100%;max-width:260px}" +
       ".dshAutoCheckInput:disabled{opacity:.6}" +
       ".dshAutoCheckHint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}" +
+      ".dshAutoCheckRefresh{display:flex;align-items:center;gap:8px;margin:0}" +
+      ".dshAutoCheckRefresh button{background:0 0;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px;line-height:18px;padding:2px 10px}" +
+      ".dshAutoCheckRefresh button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}" +
+      ".dshAutoCheckRefresh button:disabled{opacity:.5;cursor:default}" +
       ".dshAutoCheckNotice{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}" +
       ".dshAutoCheckError{display:flex;align-items:center;gap:12px;margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:1.5}" +
       ".dshAutoCheckError button{background:0 0;border:0;color:var(--dsw-alias-brand-primary);cursor:pointer;font:inherit;padding:0}";
@@ -52,6 +57,8 @@ window.__ModuleLoader__.load({
       maxInputCharsHint: "Qwen3Guard 模式下，超过此长度的审查内容会保留首尾、截断中间，避免 32k 本地模型上下文溢出。0 表示不截断。",
       maxInputCharsUnit: "字符",
       loading: "正在加载可用模型…",
+      refresh: "刷新列表",
+      refreshing: "刷新中…",
       loadFailed: "无法加载模型列表。",
       retry: "重试",
       partial: "部分提供商暂不可用，列表可能不完整。",
@@ -79,6 +86,8 @@ window.__ModuleLoader__.load({
       maxInputCharsHint: "In Qwen3Guard mode, longer review input keeps its head and tail and drops the middle, so a 32k local model does not overflow. 0 disables truncation.",
       maxInputCharsUnit: "characters",
       loading: "Loading available models…",
+      refresh: "Refresh list",
+      refreshing: "Refreshing…",
       loadFailed: "Could not load the model list.",
       retry: "Retry",
       partial: "Some providers are unavailable, so the list may be incomplete.",
@@ -114,7 +123,6 @@ window.__ModuleLoader__.load({
         this.catalogStatus = "loading";
         this.catalogPartial = false;
         this.generation = 0;
-        void this.refreshCatalog();
       }
 
       projection() {
@@ -186,6 +194,26 @@ window.__ModuleLoader__.load({
     function AutoCheckCard(props) {
       const { t } = props;
       const state = props.useAutoCheckCard((snapshot) => snapshot);
+      const refreshRef = React.useRef(props.refreshCatalog);
+      refreshRef.current = props.refreshCatalog;
+
+      React.useEffect(() => {
+        refreshRef.current();
+      }, []);
+
+      React.useEffect(() => {
+        const refresh = () => refreshRef.current();
+        const onVisibility = () => {
+          if (document.visibilityState === "visible") refresh();
+        };
+        window.addEventListener("focus", refresh);
+        document.addEventListener("visibilitychange", onVisibility);
+        return () => {
+          window.removeEventListener("focus", refresh);
+          document.removeEventListener("visibilitychange", onVisibility);
+        };
+      }, []);
+
       if (props.view === "summary") return t("description");
 
       const provider = state.provider.text.trim();
@@ -335,6 +363,20 @@ window.__ModuleLoader__.load({
                   children: t("protocolWarning"),
                 })
               : null,
+            jsxs("div", {
+              className: "dshAutoCheckRefresh",
+              children: [
+                jsx("button", {
+                  type: "button",
+                  disabled: state.catalogStatus === "loading" || state.saving,
+                  onClick: () => props.refreshCatalog(),
+                  children:
+                    state.catalogStatus === "loading"
+                      ? t("refreshing")
+                      : t("refresh"),
+                }),
+              ],
+            }),
             state.catalogStatus === "loading"
               ? jsx("p", {
                   className: "dshAutoCheckNotice",
@@ -386,6 +428,25 @@ window.__ModuleLoader__.load({
       );
       ctx.effect(() => () => card.dispose(), "dsh-auto-check: form subscription");
 
+      ctx.effect(() => {
+        const events = [
+          "llm/adapters-updated",
+          "settings/document-updated",
+          "credentials/record-updated",
+          "credentials/reference-updated",
+        ];
+        const disposers = events.map((event) =>
+          ctx.remote.$on(event, () => {
+            void card.refreshCatalog();
+          }),
+        );
+        return () => {
+          for (const dispose of disposers) {
+            if (typeof dispose === "function") dispose();
+          }
+        };
+      }, "dsh-auto-check: model catalog refresh");
+
       ctx.effect(
         () =>
           ctx.configForms.whileServed([ENTRY_ID], () =>
@@ -399,6 +460,7 @@ window.__ModuleLoader__.load({
                   locale: NS,
                   inject: () => ({
                     ...card.inject(),
+                    refreshCatalog: () => card.refreshCatalog(),
                     retryCatalog: () => card.refreshCatalog(),
                     selectRoute: (route) => card.selectRoute(route),
                   }),
