@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Auto review model",
+    "description": "Choose a dedicated reviewer model for Auto review instead of following the main model."
+  }
+}
