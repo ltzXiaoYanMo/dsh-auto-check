@@ -1,6 +1,8 @@
-# dsh-auto-check publish: test and publish to npm on version tags.
+# dsh-auto-check publish: test and stage-publish to npm on version tags.
 #
 # Uses npm Trusted Publishing (OIDC) — no long-lived npm token in secrets.
+# The npm Trusted Publisher is configured with the "npm stage publish"
+# permission, so CI stages the tarball and a maintainer approves it with 2FA.
 #
 # One-time setup:
 #   1. Claim the package name with the first manual publish:
@@ -12,6 +14,10 @@
 #   3. From then on, tag a version and push it:
 #        git tag v0.1.1
 #        git push origin v0.1.1
+#   4. Approve the staged version (2FA required):
+#        npm login --registry=https://registry.npmjs.org
+#        npm stage list
+#        npm stage approve <stage-id>
 #
 # The `dsh-plugins` tag is a repository milestone, not an npm release trigger.
 name: Publish to npm
@@ -28,7 +34,7 @@ permissions:
 
 jobs:
   publish:
-    name: Test and publish
+    name: Test and stage publish
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -49,5 +55,5 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Publish to npm
-        run: npm publish --provenance --access public
+      - name: Stage publish to npm
+        run: npm stage publish --provenance --access public

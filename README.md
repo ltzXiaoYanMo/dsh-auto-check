@@ -67,7 +67,7 @@ node --check client.js
 
 ## 发布到 npm
 
-仓库包含 `.github/workflows/publish.yml`：推送 `v*` tag 时测试并发布到 npm，使用 Trusted Publishing（OIDC），不保存长期 npm token。
+仓库包含 `.github/workflows/publish.yml`：推送 `v*` tag 时测试并**暂存**发布到 npm，使用 Trusted Publishing（OIDC），不保存长期 npm token。
 
 首次发布需要手动认领包名：
 
@@ -78,9 +78,9 @@ npm publish --registry=https://registry.npmjs.org --access public
 
 然后在 npmjs.com 的包设置 → Trusted Publishing 中添加 GitHub Actions：
 
-- Owner: `ltzXiaoYanMo`
-- Repository: `dsh-auto-check`
-- Workflow: `publish.yml`
+- Owner：`ltzXiaoYanMo`
+- Repository：`dsh-auto-check`
+- Workflow：`publish.yml`
 
 之后的发布流程：
 
@@ -88,6 +88,16 @@ npm publish --registry=https://registry.npmjs.org --access public
 git tag v0.1.1
 git push origin v0.1.1
 ```
+
+工作流以 `npm stage publish` 把版本放入 npm 暂存区；因为 Trusted Publisher 配置的是 `npm stage publish` 权限，最终发布需要维护者完成 2FA 审批：
+
+```powershell
+npm login --registry=https://registry.npmjs.org
+npm stage list
+npm stage approve <stage-id>
+```
+
+也可以在 npmjs.com 的包页面完成审批。
 
 `dsh-plugins` 是仓库里程碑 tag，不会触发 npm 发布。
 
