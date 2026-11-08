@@ -52,7 +52,14 @@ window.__ModuleLoader__.load({
       protocolJson: "标准 JSON（通用模型）",
       protocolQwen3Guard: "Qwen3Guard 安全分级",
       protocolHint: "Qwen3Guard 模式会去掉 auto review 的 JSON 策略，把待审内容作为用户消息发送，并把 Safety 标签映射为风险等级：Safe 放行，Controversial / Unsafe 拒绝。",
-      protocolWarning: "Controversial 按中风险拒绝；默认审批策略下可能转人工确认，审批策略为 never 时直接拒绝。",
+      protocolWarning: "Controversial 按中风险拒绝。按下方「审查拒绝时」的设置，默认会弹出问题让你选择放行一次或维持拒绝（审批策略为 never 时同样如此）。",
+      onBlock: "审查拒绝时",
+      onBlockAsk: "询问我：放行一次或维持拒绝（默认）",
+      onBlockDeny: "直接拒绝（原有行为）",
+      onBlockHint: "审查模型拒绝、出错或超时时，默认把原因展示给你并由你选择；跳过、取消或无法弹出问题时一律维持拒绝。选「直接拒绝」恢复原有的失败即拒绝行为。",
+      reviewTimeoutMs: "审查超时",
+      reviewTimeoutMsHint: "单独配置的审查模型超过此时长仍未给出结果时，视为无响应并交给你选择。0 表示不限时。跟随主模型时不生效。",
+      reviewTimeoutMsUnit: "毫秒",
       maxInputChars: "最大审查字符数",
       maxInputCharsHint: "Qwen3Guard 模式下，超过此长度的审查内容会保留首尾、截断中间，避免 32k 本地模型上下文溢出。0 表示不截断。",
       maxInputCharsUnit: "字符",
@@ -81,7 +88,14 @@ window.__ModuleLoader__.load({
       protocolJson: "Standard JSON (general models)",
       protocolQwen3Guard: "Qwen3Guard safety grading",
       protocolHint: "Qwen3Guard mode removes auto review's JSON policy, sends the pending content as the user message, and maps the Safety label to a risk level: Safe allows; Controversial / Unsafe deny.",
-      protocolWarning: "Controversial is denied as medium risk; the default approval policy may turn it into a user confirmation, while a `never` override denies it outright.",
+      protocolWarning: "Controversial is denied as medium risk. With \"When review blocks\" below set to ask (the default), you are asked to allow it once or keep it denied, including under the `never` approval policy.",
+      onBlock: "When review blocks",
+      onBlockAsk: "Ask me: allow once or keep denied (default)",
+      onBlockDeny: "Deny outright (original behaviour)",
+      onBlockHint: "When the reviewer denies, errors or times out, the reason is shown and you decide. A skipped, cancelled or undeliverable question always keeps the denial. Choose \"Deny outright\" to restore the original fail-closed behaviour.",
+      reviewTimeoutMs: "Review timeout",
+      reviewTimeoutMsHint: "If a dedicated reviewer model gives no result within this time, it counts as unresponsive and you decide. 0 disables the timeout. Not applied when following the main model.",
+      reviewTimeoutMsUnit: "milliseconds",
       maxInputChars: "Maximum review characters",
       maxInputCharsHint: "In Qwen3Guard mode, longer review input keeps its head and tail and drops the middle, so a 32k local model does not overflow. 0 disables truncation.",
       maxInputCharsUnit: "characters",
@@ -116,6 +130,8 @@ window.__ModuleLoader__.load({
           settingsTextField("model"),
           settingsTextField("protocol"),
           settingsNumberField("maxInputChars"),
+          settingsTextField("onBlock"),
+          settingsNumberField("reviewTimeoutMs"),
         ]);
         this.actions = this.form.actions();
         this.store = this.form.bind(() => this.projection());
@@ -132,6 +148,8 @@ window.__ModuleLoader__.load({
           model: this.form.field("model"),
           protocol: this.form.field("protocol"),
           maxInputChars: this.form.field("maxInputChars"),
+          onBlock: this.form.field("onBlock"),
+          reviewTimeoutMs: this.form.field("reviewTimeoutMs"),
           groups: this.groups,
           catalogStatus: this.catalogStatus,
           catalogPartial: this.catalogPartial,
@@ -219,6 +237,8 @@ window.__ModuleLoader__.load({
       const provider = state.provider.text.trim();
       const model = state.model.text.trim();
       const protocol = state.protocol.text.trim() || "auto";
+      const onBlock =
+        (state.onBlock?.text ?? "").trim().toLowerCase() === "deny" ? "deny" : "ask";
       const current = provider !== "" && model !== "" ? provider + SEP + model : "";
       const routes = new Set();
       for (const group of state.groups) {
@@ -346,6 +366,56 @@ window.__ModuleLoader__.load({
                 jsx("p", {
                   className: "dshAutoCheckHint",
                   children: t("maxInputCharsHint"),
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsx("label", {
+                  className: "dshAutoCheckLabel",
+                  htmlFor: "dsh-auto-check-on-block",
+                  children: t("onBlock"),
+                }),
+                jsx("select", {
+                  className: "dshAutoCheckSelect",
+                  id: "dsh-auto-check-on-block",
+                  value: onBlock,
+                  disabled: !state.writable || state.saving,
+                  onChange: (event) => props.edit("onBlock", event.target.value),
+                  children: [
+                    jsx("option", { value: "ask", children: t("onBlockAsk") }, "ask"),
+                    jsx("option", { value: "deny", children: t("onBlockDeny") }, "deny"),
+                  ],
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("onBlockHint"),
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsx("label", {
+                  className: "dshAutoCheckLabel",
+                  htmlFor: "dsh-auto-check-review-timeout",
+                  children: t("reviewTimeoutMs") + " (" + t("reviewTimeoutMsUnit") + ")",
+                }),
+                jsx("input", {
+                  className: "dshAutoCheckInput",
+                  id: "dsh-auto-check-review-timeout",
+                  type: "number",
+                  min: 0,
+                  step: 1000,
+                  value: state.reviewTimeoutMs?.text ?? "",
+                  disabled: !state.writable || state.saving,
+                  onChange: (event) =>
+                    props.edit("reviewTimeoutMs", event.target.value),
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("reviewTimeoutMsHint"),
                 }),
               ],
             }),
