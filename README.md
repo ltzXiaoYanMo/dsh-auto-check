@@ -78,7 +78,7 @@ Categories: <分类列表 | None>
 
 ### 云端 / 兼容网关：`store` 字段被拒绝
 
-一些 OpenAI 兼容网关（例如 newapi 代理的 Qwen3Guard）会返回：
+一些 OpenAI 兼容网关（例如 Superlinked 代理的 Qwen3Guard）会返回：
 
 ```text
 400 'store' is not supported by this endpoint (param: store, code: unsupported_field)
@@ -87,11 +87,11 @@ Categories: <分类列表 | None>
 这是 pi-ai 的兼容层在 `compat.supportsStore` 为真时自动附加了 `store: false`，而网关不接受该字段。给该 provider 的模型配置 `compat`：
 
 ```yaml
-security-huahuo-newapi:
+security-example:
   api: openai-completions
-  baseURL: https://newapi.amaicat.work/v1
+  baseURL: https://example.com/v1
   compat:
-    supportsStore: false
+    supportsStore: false # 添加这条
   models:
     - id: Qwen3Guard-Gen-4B
       name: Qwen3Guard-Gen-4B
@@ -118,40 +118,3 @@ node --check client.js
 ```
 
 测试覆盖：普通请求放行、审查请求改写、递归回放、空配置回退、同路由不重复改写、Qwen3Guard 协议探测、请求改写、字符预算截断、标签映射与流转换；审查闸门三种拒绝形态识别、提问与答案解析、提问失败一律维持拒绝、审查超时合成 `REVIEWER_TIMEOUT` 结束块，以及在真实 cordis 中两种加载顺序下都位于闸门外层（找不到宿主 checkout 时该项跳过）。
-
-## 发布到 npm
-
-仓库包含 `.github/workflows/publish.yml`：推送 `v*` tag 时测试并**暂存**发布到 npm，使用 Trusted Publishing（OIDC），不保存长期 npm token。
-
-首次发布需要手动认领包名：
-
-```powershell
-npm login --registry=https://registry.npmjs.org
-npm publish --registry=https://registry.npmjs.org --access public
-```
-
-然后在 npmjs.com 的包设置 → Trusted Publishing 中添加 GitHub Actions：
-
-- Owner：`ltzXiaoYanMo`
-- Repository：`dsh-auto-check`
-- Workflow：`publish.yml`
-
-之后的发布流程：
-
-```powershell
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-工作流以 `npm stage publish` 把版本放入 npm 暂存区；因为 Trusted Publisher 配置的是 `npm stage publish` 权限，最终发布需要维护者完成 2FA 审批：
-
-```powershell
-npm login --registry=https://registry.npmjs.org
-npm stage list
-npm stage approve <stage-id>
-```
-
-也可以在 npmjs.com 的包页面完成审批。
-
-`dsh-plugins` 是仓库里程碑 tag，不会触发 npm 发布。
-
