@@ -147,6 +147,7 @@ test("the Qwen3Guard request drops the JSON policy and forwards review text", ()
       },
     ],
     temperature: 0,
+    store: false,
   });
   const next = qwen3GuardRequest(
     request,
@@ -156,6 +157,7 @@ test("the Qwen3Guard request drops the JSON policy and forwards review text", ()
   assert.equal(next.provider, "guard-provider");
   assert.equal(next.model, "Qwen/Qwen3Guard-Gen-4B");
   assert.equal(Object.hasOwn(next, "system"), false);
+  assert.equal(Object.hasOwn(next, "store"), false);
   assert.deepEqual(next.messages, [
     {
       role: "user",

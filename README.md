@@ -50,7 +50,30 @@ Categories: <分类列表 | None>
 
 自动审查会把当前会话的过滤历史和待审工具调用一起发给审查模型。长会话的审查输入可能达到数万 Token，超过 Qwen3Guard-Gen 本地 32k 上下文，导致自动审查失败并按原策略拒绝所有工具调用。
 
-「最大审查字符数」用于 Qwen3Guard 协议：超过预算时保留开头（环境与项目指令）和结尾（最近历史与待审调用），截断中间并插入标记。默认 `96000` 字符（约 24k Token），对 32k 模型留出输出余量；设为 `0` 可关闭截断。使用更大上下文的远程模型时可以调高或关闭。
+「最大审查字符数」用于 Qwen3Guard 协议：超过预算时保留开头（环境与项目指令）和结尾（最近历史与待审调用），截断中间并插入标记。默认 `64000` 字符（约 16k Token），适配 32k 上下文并留出输出余量；设为 `0` 可关闭截断。使用更大上下文的远程模型时可以调高或关闭。
+
+### 云端 / 兼容网关：`store` 字段被拒绝
+
+一些 OpenAI 兼容网关（例如 newapi 代理的 Qwen3Guard）会返回：
+
+```text
+400 'store' is not supported by this endpoint (param: store, code: unsupported_field)
+```
+
+这是 pi-ai 的兼容层在 `compat.supportsStore` 为真时自动附加了 `store: false`，而网关不接受该字段。给该 provider 的模型配置 `compat`：
+
+```yaml
+security-huahuo-newapi:
+  api: openai-completions
+  baseURL: https://newapi.amaicat.work/v1
+  compat:
+    supportsStore: false
+  models:
+    - id: Qwen3Guard-Gen-4B
+      name: Qwen3Guard-Gen-4B
+```
+
+本插件也会在 Qwen3Guard 请求中主动丢弃 `store`，但适配器层附加的字段需要在 provider 配置里关闭。
 
 ## 安装
 
