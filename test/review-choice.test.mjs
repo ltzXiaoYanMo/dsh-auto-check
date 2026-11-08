@@ -9,6 +9,7 @@ import {
   REVIEW_CHOICE_QUESTION_ID,
   REVIEWER_TIMEOUT_CODE,
   createReviewChoiceListener,
+  formatArguments,
   isReviewDenial,
   keepOutermost,
   resolveChoice,
@@ -94,6 +95,27 @@ test("the question shows the tool and reviewer reason, keep-denied first", () =>
   assert.match(reviewQuestion(exec, failedGate).questions[0].detail, /REVIEWER_TIMEOUT/);
   assert.match(reviewQuestion(exec, failedGate).questions[0].detail, /没有响应/);
   assert.match(reviewQuestion(exec, askGate).questions[0].detail, /拒绝了此调用：Qwen3Guard: Unsafe/);
+});
+
+test("the question shows formatted tool arguments", () => {
+  const withArgs = { ...exec, arguments: { command: "rm -rf /tmp/x && echo ```", timeout: 5 } };
+  const detail = reviewQuestion(withArgs, deniedGate).questions[0].detail;
+  assert.match(detail, /\*\*Details \/ 详情:\*\*/);
+  assert.match(detail, /````sh\nrm -rf \/tmp\/x && echo ```\n````/);
+  assert.match(detail, /```json\n\{\n  "timeout": 5\n\}\n```/);
+  assert.doesNotMatch(reviewQuestion(exec, deniedGate).questions[0].detail, /Details/);
+});
+
+test("formatArguments handles strings, JSON strings and long input", () => {
+  assert.equal(formatArguments(undefined), "");
+  assert.equal(formatArguments({}), "");
+  assert.equal(formatArguments("  "), "");
+  assert.equal(formatArguments('{"command":"ls"}'), "```sh\nls\n```");
+  assert.equal(formatArguments("not json"), "```\nnot json\n```");
+  assert.equal(formatArguments({ path: "a.txt" }), '```json\n{\n  "path": "a.txt"\n}\n```');
+  const long = formatArguments({ command: "x".repeat(5000) });
+  assert.match(long, /1000 more chars/);
+  assert.ok(long.length < 4200);
 });
 
 test("only the explicit allow option allows", () => {
