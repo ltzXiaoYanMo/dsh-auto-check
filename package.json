@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-check",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Give DeepSeek Harness Auto review its own reviewer model instead of following the main model.",
   "type": "module",
   "main": "lib/index.js",
@@ -45,8 +45,5 @@
         "@deepseek-ai/dsh-api-remotes"
       ]
     }
-  },
-  "dependencies": {
-    "dsh-auto-check": "^0.1.0"
   }
 }

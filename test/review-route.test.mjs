@@ -8,6 +8,7 @@ import {
   resolveReviewProtocol,
   routeReview,
   REVIEW_POLICY_PREFIX,
+  truncateReviewText,
 } from "../lib/review-route.js";
 
 const policy = `${REVIEW_POLICY_PREFIX}You are the Auto review policy.`;
@@ -164,6 +165,41 @@ test("the Qwen3Guard request drops the JSON policy and forwards review text", ()
   assert.equal(next.maxTokens, 128);
   assert.equal(next.temperature, 0);
   assert.equal(request.system, policy, "frozen request is not mutated");
+});
+
+test("long review text is truncated from the middle, keeping both ends", () => {
+  const text = "HEAD-" + "x".repeat(500) + "-TAIL";
+  const short = truncateReviewText(text, 200);
+  assert.equal(short.length, 200);
+  assert.equal(short.startsWith("HEAD-"), true);
+  assert.equal(short.endsWith("-TAIL"), true);
+  assert.equal(short.includes("truncated"), true);
+  assert.equal(truncateReviewText("short", 200), "short");
+  assert.equal(truncateReviewText("short", 0), "short");
+});
+
+test("the Qwen3Guard request applies the configured character budget", () => {
+  const request = Object.freeze({
+    provider: "main-provider",
+    model: "main-model",
+    system: policy,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "A".repeat(500) + "PENDING" }],
+      },
+    ],
+  });
+  const next = qwen3GuardRequest(
+    request,
+    "guard-provider",
+    "Qwen/Qwen3Guard-Gen-4B",
+    120,
+  );
+  const text = next.messages[0].content[0].text;
+  assert.equal(text.length, 120);
+  assert.equal(text.endsWith("PENDING"), true);
+  assert.equal(text.includes("truncated"), true);
 });
 
 test("Qwen3Guard labels map to the auto-review decision protocol", () => {

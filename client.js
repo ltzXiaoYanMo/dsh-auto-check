@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
     const {
       SettingsForm,
       SettingsFormModel,
+      settingsNumberField,
       settingsTextField,
     } = require("@deepseek-ai/dsh-client-ui-primitives");
 
@@ -17,6 +18,8 @@ window.__ModuleLoader__.load({
       ".dshAutoCheckLabel{color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5}" +
       ".dshAutoCheckSelect{background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;min-height:32px;padding:4px 8px;width:100%;max-width:520px}" +
       ".dshAutoCheckSelect:disabled{opacity:.6}" +
+      ".dshAutoCheckInput{background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;min-height:32px;padding:4px 8px;width:100%;max-width:260px}" +
+      ".dshAutoCheckInput:disabled{opacity:.6}" +
       ".dshAutoCheckHint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}" +
       ".dshAutoCheckNotice{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}" +
       ".dshAutoCheckError{display:flex;align-items:center;gap:12px;margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:1.5}" +
@@ -45,6 +48,9 @@ window.__ModuleLoader__.load({
       protocolQwen3Guard: "Qwen3Guard 安全分级",
       protocolHint: "Qwen3Guard 模式会去掉 auto review 的 JSON 策略，把待审内容作为用户消息发送，并把 Safety 标签映射为风险等级：Safe 放行，Controversial / Unsafe 拒绝。",
       protocolWarning: "Controversial 按中风险拒绝；默认审批策略下可能转人工确认，审批策略为 never 时直接拒绝。",
+      maxInputChars: "最大审查字符数",
+      maxInputCharsHint: "Qwen3Guard 模式下，超过此长度的审查内容会保留首尾、截断中间，避免 32k 本地模型上下文溢出。0 表示不截断。",
+      maxInputCharsUnit: "字符",
       loading: "正在加载可用模型…",
       loadFailed: "无法加载模型列表。",
       retry: "重试",
@@ -69,6 +75,9 @@ window.__ModuleLoader__.load({
       protocolQwen3Guard: "Qwen3Guard safety grading",
       protocolHint: "Qwen3Guard mode removes auto review's JSON policy, sends the pending content as the user message, and maps the Safety label to a risk level: Safe allows; Controversial / Unsafe deny.",
       protocolWarning: "Controversial is denied as medium risk; the default approval policy may turn it into a user confirmation, while a `never` override denies it outright.",
+      maxInputChars: "Maximum review characters",
+      maxInputCharsHint: "In Qwen3Guard mode, longer review input keeps its head and tail and drops the middle, so a 32k local model does not overflow. 0 disables truncation.",
+      maxInputCharsUnit: "characters",
       loading: "Loading available models…",
       loadFailed: "Could not load the model list.",
       retry: "Retry",
@@ -97,6 +106,7 @@ window.__ModuleLoader__.load({
           settingsTextField("provider"),
           settingsTextField("model"),
           settingsTextField("protocol"),
+          settingsNumberField("maxInputChars"),
         ]);
         this.actions = this.form.actions();
         this.store = this.form.bind(() => this.projection());
@@ -113,6 +123,7 @@ window.__ModuleLoader__.load({
           provider: this.form.field("provider"),
           model: this.form.field("model"),
           protocol: this.form.field("protocol"),
+          maxInputChars: this.form.field("maxInputChars"),
           groups: this.groups,
           catalogStatus: this.catalogStatus,
           catalogPartial: this.catalogPartial,
@@ -282,6 +293,31 @@ window.__ModuleLoader__.load({
                     jsx("option", { value: "json", children: t("protocolJson") }, "json"),
                     jsx("option", { value: "qwen3guard", children: t("protocolQwen3Guard") }, "qwen3guard"),
                   ],
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsx("label", {
+                  className: "dshAutoCheckLabel",
+                  htmlFor: "dsh-auto-check-max-input",
+                  children: t("maxInputChars"),
+                }),
+                jsx("input", {
+                  className: "dshAutoCheckInput",
+                  id: "dsh-auto-check-max-input",
+                  type: "number",
+                  min: 0,
+                  step: 1000,
+                  value: state.maxInputChars?.text ?? "",
+                  disabled: !state.writable || state.saving,
+                  onChange: (event) =>
+                    props.edit("maxInputChars", event.target.value),
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("maxInputCharsHint"),
                 }),
               ],
             }),
