@@ -21,6 +21,8 @@ window.__ModuleLoader__.load({
       ".dshAutoCheckSelect:disabled{opacity:.6}" +
       ".dshAutoCheckInput{background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;min-height:32px;padding:4px 8px;width:100%;max-width:260px}" +
       ".dshAutoCheckInput:disabled{opacity:.6}" +
+      ".dshAutoCheckCheck{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;cursor:pointer}" +
+      ".dshAutoCheckCheck input:disabled{opacity:.6}" +
       ".dshAutoCheckHint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}" +
       ".dshAutoCheckRefresh{display:flex;align-items:center;gap:8px;margin:0}" +
       ".dshAutoCheckRefresh button{background:0 0;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px;line-height:18px;padding:2px 10px}" +
@@ -63,6 +65,8 @@ window.__ModuleLoader__.load({
       maxInputChars: "最大审查字符数",
       maxInputCharsHint: "Qwen3Guard 模式下，超过此长度的审查内容会保留首尾、截断中间，避免 32k 本地模型上下文溢出。0 表示不截断。",
       maxInputCharsUnit: "字符",
+      compatMode: "兼容模式",
+      compatModeHint: "开启后，在审查模型所属 provider 的配置中添加 compat.supportsStore: false，用于拒绝 store 字段的 OpenAI 兼容网关；关闭后移除该项。只在选择了单独的审查模型时生效，并会修改该 provider 的模型设置。",
       loading: "正在加载可用模型…",
       refresh: "刷新列表",
       refreshing: "刷新中…",
@@ -99,6 +103,8 @@ window.__ModuleLoader__.load({
       maxInputChars: "Maximum review characters",
       maxInputCharsHint: "In Qwen3Guard mode, longer review input keeps its head and tail and drops the middle, so a 32k local model does not overflow. 0 disables truncation.",
       maxInputCharsUnit: "characters",
+      compatMode: "Compatibility mode",
+      compatModeHint: "When on, adds compat.supportsStore: false to the reviewer model's provider configuration, for OpenAI-compatible gateways that reject the store field; turning it off removes it. Applies only when a dedicated reviewer model is selected, and edits that provider's model settings.",
       loading: "Loading available models…",
       refresh: "Refresh list",
       refreshing: "Refreshing…",
@@ -132,6 +138,11 @@ window.__ModuleLoader__.load({
           settingsNumberField("maxInputChars"),
           settingsTextField("onBlock"),
           settingsNumberField("reviewTimeoutMs"),
+          {
+            field: "compatMode",
+            format: (value) => (value === true ? "true" : "false"),
+            parse: (text) => ({ kind: "set", value: text === "true" }),
+          },
         ]);
         this.actions = this.form.actions();
         this.store = this.form.bind(() => this.projection());
@@ -150,6 +161,7 @@ window.__ModuleLoader__.load({
           maxInputChars: this.form.field("maxInputChars"),
           onBlock: this.form.field("onBlock"),
           reviewTimeoutMs: this.form.field("reviewTimeoutMs"),
+          compatMode: this.form.field("compatMode"),
           groups: this.groups,
           catalogStatus: this.catalogStatus,
           catalogPartial: this.catalogPartial,
@@ -416,6 +428,30 @@ window.__ModuleLoader__.load({
                 jsx("p", {
                   className: "dshAutoCheckHint",
                   children: t("reviewTimeoutMsHint"),
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsxs("label", {
+                  className: "dshAutoCheckCheck",
+                  htmlFor: "dsh-auto-check-compat-mode",
+                  children: [
+                    jsx("input", {
+                      id: "dsh-auto-check-compat-mode",
+                      type: "checkbox",
+                      checked: (state.compatMode?.text ?? "") === "true",
+                      disabled: !state.writable || state.saving,
+                      onChange: (event) =>
+                        props.edit("compatMode", event.target.checked ? "true" : "false"),
+                    }),
+                    jsx("span", { children: t("compatMode") }),
+                  ],
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("compatModeHint"),
                 }),
               ],
             }),

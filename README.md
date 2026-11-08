@@ -21,6 +21,7 @@
    - **标准 JSON**：要求审查模型严格输出 `{risk, decision, reason?}`，适用于通用模型。
    - **Qwen3Guard 安全分级**：适用于 Qwen3Guard-Gen 系列（0.6B / 4B / 8B）。
 5. 按需设置「审查拒绝时」（`onBlock`）与「审查超时」（`reviewTimeoutMs`），见下一节。
+6. 审查模型走的网关拒绝 `store` 字段时，勾选「兼容模式」（`compatMode`），见「云端 / 兼容网关」一节。
 
 模型列表来自当前会话可路由的模型目录。打开页面、窗口重新聚焦，以及模型/凭据设置变更时会自动刷新；也可以点击「刷新列表」手动重新拉取。只影响自动审查，不影响主对话或子代理。
 
@@ -97,6 +98,13 @@ security-example:
       name: Qwen3Guard-Gen-4B
 ```
 
+也可以直接在本插件设置里勾选 **兼容模式**（`compatMode`，默认关闭），由插件替你维护这条配置：
+
+- 开启时：在当前审查模型所属 provider 的 pi-ai 配置（`llm-pi-ai` 条目的 `providers.<provider>`）里写入 `compat.supportsStore: false`；已经是 `false` 时不重复写入。之后切换审查模型，也会给新 provider 写入。
+- 关闭时：从当前审查 provider 的配置里移除 `compat.supportsStore`（`compat` 中没有其他项时整段移除）。插件启动时开关为关闭则不做任何修改，不会删掉你手写的配置；来自更低配置层的值也不会被移除。
+- 只在选择了单独的审查模型（「跟随主模型」以外）且该 provider 已在 pi-ai 的 `providers` 中声明时生效。
+- pi-ai 只从 provider / model 配置读取 `compat`，单次请求里携带 `compat` 不会生效，所以兼容模式必须修改 provider 配置；这会同时影响主对话里使用该 provider 的请求。
+
 本插件也会在 Qwen3Guard 请求中主动丢弃 `store`，但适配器层附加的字段需要在 provider 配置里关闭。
 
 ## 安装
@@ -114,7 +122,8 @@ security-example:
 npm test
 node --check lib/index.js
 node --check lib/review-choice.js
+node --check lib/compat-mode.js
 node --check client.js
 ```
 
-测试覆盖：普通请求放行、审查请求改写、递归回放、空配置回退、同路由不重复改写、Qwen3Guard 协议探测、请求改写、字符预算截断、标签映射与流转换；审查闸门三种拒绝形态识别、提问与答案解析、提问失败一律维持拒绝、审查超时合成 `REVIEWER_TIMEOUT` 结束块，以及在真实 cordis 中两种加载顺序下都位于闸门外层（找不到宿主 checkout 时该项跳过）。
+测试覆盖：普通请求放行、审查请求改写、递归回放、空配置回退、同路由不重复改写、Qwen3Guard 协议探测、请求改写、字符预算截断、标签映射与流转换；审查闸门三种拒绝形态识别、提问与答案解析、提问失败一律维持拒绝、审查超时合成 `REVIEWER_TIMEOUT` 结束块；兼容模式按开关增删 `compat.supportsStore`、保留其他 `compat` 项且不动更低配置层的值，以及在真实 cordis 中两种加载顺序下都位于闸门外层（找不到宿主 checkout 时该项跳过）。
