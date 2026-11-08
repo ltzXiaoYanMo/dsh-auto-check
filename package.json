@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-check",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Give DeepSeek Harness Auto review its own reviewer model instead of following the main model.",
   "type": "module",
   "main": "lib/index.js",
