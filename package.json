@@ -21,6 +21,17 @@
     "LICENSE"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ltzXiaoYanMo/dsh-auto-check.git"
+  },
+  "homepage": "https://github.com/ltzXiaoYanMo/dsh-auto-check#readme",
+  "bugs": {
+    "url": "https://github.com/ltzXiaoYanMo/dsh-auto-check/issues"
+  },
+  "scripts": {
+    "test": "node --test test/review-route.test.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "cordis.patch.yml"

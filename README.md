@@ -64,3 +64,30 @@ node --check client.js
 ```
 
 测试覆盖：普通请求放行、审查请求改写、递归回放、空配置回退、同路由不重复改写、Qwen3Guard 协议探测、请求改写、标签映射与流转换。
+
+## 发布到 npm
+
+仓库包含 `.github/workflows/publish.yml`：推送 `v*` tag 时测试并发布到 npm，使用 Trusted Publishing（OIDC），不保存长期 npm token。
+
+首次发布需要手动认领包名：
+
+```powershell
+npm login --registry=https://registry.npmjs.org
+npm publish --registry=https://registry.npmjs.org --access public
+```
+
+然后在 npmjs.com 的包设置 → Trusted Publishing 中添加 GitHub Actions：
+
+- Owner: `ltzXiaoYanMo`
+- Repository: `dsh-auto-check`
+- Workflow: `publish.yml`
+
+之后的发布流程：
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+`dsh-plugins` 是仓库里程碑 tag，不会触发 npm 发布。
+
