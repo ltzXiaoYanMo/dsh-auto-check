@@ -1,0 +1,16 @@
+# 让 Git 自动处理文本文件的换行符（默认规范化为 LF 存储）
+* text=auto
+
+# 明确声明需要保持 LF 的文件类型（如脚本、配置文件）
+*.sh text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+
+# 明确声明需要保持 CRLF 的文件类型（如 Windows 批处理、解决方案文件）
+*.bat text eol=crlf
+*.sln text eol=crlf
+
+# 声明二进制文件，Git 不应尝试转换或合并它们
+*.png binary
+*.jpg binary
+*.zip binary

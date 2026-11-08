@@ -45,5 +45,9 @@
         "@deepseek-ai/dsh-api-remotes"
       ]
     }
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/schemastery": "3.18.4"
   }
 }
