@@ -30,7 +30,7 @@
     "url": "https://github.com/ltzXiaoYanMo/dsh-auto-check/issues"
   },
   "scripts": {
-    "test": "node --test test/review-route.test.mjs"
+    "test": "node --test \"test/*.test.mjs\""
   },
   "dsh": {
     "bundle": {
