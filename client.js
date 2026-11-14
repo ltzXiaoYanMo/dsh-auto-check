@@ -54,6 +54,8 @@ window.__ModuleLoader__.load({
       protocolJson: "标准 JSON（通用模型）",
       protocolQwen3Guard: "Qwen3Guard 安全分级",
       protocolHint: "Qwen3Guard 模式会去掉 auto review 的 JSON 策略，把待审内容作为用户消息发送，并把 Safety 标签映射为风险等级：Safe 放行，Controversial / Unsafe 拒绝。",
+      chineseReason: "拒绝原因用中文说明",
+      chineseReasonHint: "在标准 JSON 策略后追加一段要求：每次拒绝都必须带上中文 reason，先说清这次操作会做什么，再说清为什么拒绝。关闭后使用 auto review 的原始英文策略。",
       protocolWarning: "Controversial 按中风险拒绝。按下方「审查拒绝时」的设置，默认会弹出问题让你选择放行一次或维持拒绝（审批策略为 never 时同样如此）。",
       onBlock: "审查拒绝时",
       onBlockAsk: "询问我：放行一次或维持拒绝（默认）",
@@ -63,7 +65,7 @@ window.__ModuleLoader__.load({
       reviewTimeoutMsHint: "单独配置的审查模型超过此时长仍未给出结果时，视为无响应并交给你选择。0 表示不限时。跟随主模型时不生效。",
       reviewTimeoutMsUnit: "毫秒",
       maxInputChars: "最大审查字符数",
-      maxInputCharsHint: "Qwen3Guard 模式下，超过此长度的审查内容会保留首尾、截断中间，避免 32k 本地模型上下文溢出。0 表示不截断。",
+      maxInputCharsHint: "Qwen3Guard 模式下，超过此长度时保留环境与待审调用、从最旧历史开始整条丢弃。默认 24000；实测超过 30k 字符后模型输出开始不稳定。0 表示不裁剪。",
       maxInputCharsUnit: "字符",
       compatMode: "兼容模式",
       compatModeHint: "开启后，在审查模型所属 provider 的配置中添加 compat.supportsStore: false，用于拒绝 store 字段的 OpenAI 兼容网关；关闭后移除该项。只在选择了单独的审查模型时生效，并会修改该 provider 的模型设置。",
@@ -92,6 +94,8 @@ window.__ModuleLoader__.load({
       protocolJson: "Standard JSON (general models)",
       protocolQwen3Guard: "Qwen3Guard safety grading",
       protocolHint: "Qwen3Guard mode removes auto review's JSON policy, sends the pending content as the user message, and maps the Safety label to a risk level: Safe allows; Controversial / Unsafe deny.",
+      chineseReason: "Explain denials in Chinese",
+      chineseReasonHint: "Appends a requirement to the standard JSON policy: every denial must carry a Chinese reason that first states what the operation would do and then why it is denied. Turn it off to use auto review's original English policy.",
       protocolWarning: "Controversial is denied as medium risk. With \"When review blocks\" below set to ask (the default), you are asked to allow it once or keep it denied, including under the `never` approval policy.",
       onBlock: "When review blocks",
       onBlockAsk: "Ask me: allow once or keep denied (default)",
@@ -101,7 +105,7 @@ window.__ModuleLoader__.load({
       reviewTimeoutMsHint: "If a dedicated reviewer model gives no result within this time, it counts as unresponsive and you decide. 0 disables the timeout. Not applied when following the main model.",
       reviewTimeoutMsUnit: "milliseconds",
       maxInputChars: "Maximum review characters",
-      maxInputCharsHint: "In Qwen3Guard mode, longer review input keeps its head and tail and drops the middle, so a 32k local model does not overflow. 0 disables truncation.",
+      maxInputCharsHint: "In Qwen3Guard mode, input beyond this length keeps the environment and the pending call and drops whole messages from the oldest history. Default 24000; output degraded above roughly 30k characters in testing. 0 disables cropping.",
       maxInputCharsUnit: "characters",
       compatMode: "Compatibility mode",
       compatModeHint: "When on, adds compat.supportsStore: false to the reviewer model's provider configuration, for OpenAI-compatible gateways that reject the store field; turning it off removes it. Applies only when a dedicated reviewer model is selected, and edits that provider's model settings.",
@@ -143,6 +147,11 @@ window.__ModuleLoader__.load({
             format: (value) => (value === true ? "true" : "false"),
             parse: (text) => ({ kind: "set", value: text === "true" }),
           },
+          {
+            field: "chineseReason",
+            format: (value) => (value === false ? "false" : "true"),
+            parse: (text) => ({ kind: "set", value: text !== "false" }),
+          },
         ]);
         this.actions = this.form.actions();
         this.store = this.form.bind(() => this.projection());
@@ -162,6 +171,7 @@ window.__ModuleLoader__.load({
           onBlock: this.form.field("onBlock"),
           reviewTimeoutMs: this.form.field("reviewTimeoutMs"),
           compatMode: this.form.field("compatMode"),
+          chineseReason: this.form.field("chineseReason"),
           groups: this.groups,
           catalogStatus: this.catalogStatus,
           catalogPartial: this.catalogPartial,
@@ -251,6 +261,7 @@ window.__ModuleLoader__.load({
       const protocol = state.protocol.text.trim() || "auto";
       const onBlock =
         (state.onBlock?.text ?? "").trim().toLowerCase() === "deny" ? "deny" : "ask";
+      const chineseReason = (state.chineseReason?.text ?? "true") !== "false";
       const current = provider !== "" && model !== "" ? provider + SEP + model : "";
       const routes = new Set();
       for (const group of state.groups) {
@@ -452,6 +463,30 @@ window.__ModuleLoader__.load({
                 jsx("p", {
                   className: "dshAutoCheckHint",
                   children: t("compatModeHint"),
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsxs("label", {
+                  className: "dshAutoCheckCheck",
+                  htmlFor: "dsh-auto-check-chinese-reason",
+                  children: [
+                    jsx("input", {
+                      id: "dsh-auto-check-chinese-reason",
+                      type: "checkbox",
+                      checked: chineseReason,
+                      disabled: !state.writable || state.saving,
+                      onChange: (event) =>
+                        props.edit("chineseReason", event.target.checked ? "true" : "false"),
+                    }),
+                    jsx("span", { children: t("chineseReason") }),
+                  ],
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("chineseReasonHint"),
                 }),
               ],
             }),

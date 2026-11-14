@@ -8,10 +8,14 @@ import {
   KEEP_DENIED_LABEL,
   REVIEW_CHOICE_QUESTION_ID,
   REVIEWER_TIMEOUT_CODE,
+  collapseReason,
   createReviewChoiceListener,
+  describeArguments,
+  foldReason,
   formatArguments,
   isReviewDenial,
   keepOutermost,
+  qwen3GuardVerdict,
   resolveChoice,
   reviewDenialKind,
   reviewQuestion,
@@ -83,7 +87,8 @@ test("the question shows the tool and reviewer reason, keep-denied first", () =>
   assert.equal(question.id, REVIEW_CHOICE_QUESTION_ID);
   assert.equal(question.intent, undefined, "no intent avoids BAD_INTENT");
   assert.match(question.detail, /`bash`/);
-  assert.match(question.detail, /Qwen3Guard: Controversial \(categories: Violent\)/);
+  assert.match(question.detail, /Safety: Controversial/);
+  assert.match(question.detail, /Categories: Violent/);
   assert.deepEqual(
     question.options.map((option) => option.label),
     [KEEP_DENIED_LABEL, ALLOW_ONCE_LABEL],
@@ -94,16 +99,23 @@ test("the question shows the tool and reviewer reason, keep-denied first", () =>
 
   assert.match(reviewQuestion(exec, failedGate).questions[0].detail, /REVIEWER_TIMEOUT/);
   assert.match(reviewQuestion(exec, failedGate).questions[0].detail, /没有响应/);
-  assert.match(reviewQuestion(exec, askGate).questions[0].detail, /拒绝了此调用：Qwen3Guard: Unsafe/);
+  const askDetail = reviewQuestion(exec, askGate).questions[0].detail;
+  assert.match(askDetail, /Safety: Unsafe/);
+  assert.match(askDetail, /Categories: None/);
+  assert.doesNotMatch(askDetail, /Auto review 拒绝了此调用：/, "the host wrapper is stripped");
+  assert.doesNotMatch(askDetail, /Auto review denied this call:/, "the English half is dropped");
 });
 
 test("the question shows formatted tool arguments", () => {
   const withArgs = { ...exec, arguments: { command: "rm -rf /tmp/x && echo ```", timeout: 5 } };
   const detail = reviewQuestion(withArgs, deniedGate).questions[0].detail;
-  assert.match(detail, /\*\*Details \/ 详情:\*\*/);
+  assert.match(detail, /\*\*Command \/ 命令:\*\*/);
   assert.match(detail, /````sh\nrm -rf \/tmp\/x && echo ```\n````/);
+  assert.match(detail, /\*\*Arguments \/ 参数:\*\*/);
   assert.match(detail, /```json\n\{\n  "timeout": 5\n\}\n```/);
-  assert.doesNotMatch(reviewQuestion(exec, deniedGate).questions[0].detail, /Details/);
+  const bare = reviewQuestion(exec, deniedGate).questions[0].detail;
+  assert.doesNotMatch(bare, /Command \/ 命令/);
+  assert.doesNotMatch(bare, /Arguments \/ 参数/);
 });
 
 test("formatArguments handles strings, JSON strings and long input", () => {
@@ -113,9 +125,128 @@ test("formatArguments handles strings, JSON strings and long input", () => {
   assert.equal(formatArguments('{"command":"ls"}'), "```sh\nls\n```");
   assert.equal(formatArguments("not json"), "```\nnot json\n```");
   assert.equal(formatArguments({ path: "a.txt" }), '```json\n{\n  "path": "a.txt"\n}\n```');
-  const long = formatArguments({ command: "x".repeat(5000) });
-  assert.match(long, /1000 more chars/);
-  assert.ok(long.length < 4200);
+
+  // The command is what the user authorises: it is never clipped.
+  const command = "x".repeat(5000);
+  const longCommand = formatArguments({ command });
+  assert.equal(longCommand, `\`\`\`sh\n${command}\n\`\`\``);
+
+  // Other arguments still are.
+  const longRest = formatArguments({ command: "ls", note: "y".repeat(5000) });
+  assert.match(longRest, /^```sh\nls\n```/);
+  assert.match(longRest, /\(\d+ more chars \/ 另有 \d+ 个字符未显示\)/);
+  assert.ok(longRest.length < 4200);
+});
+
+test("describeArguments splits the command from the rest", () => {
+  assert.deepEqual(describeArguments(undefined), {});
+  assert.deepEqual(describeArguments({}), {});
+  assert.deepEqual(describeArguments({ command: "ls" }), { command: "```sh\nls\n```" });
+  assert.deepEqual(describeArguments({ script: "print(1)" }), {
+    command: "```sh\nprint(1)\n```",
+  });
+  assert.deepEqual(describeArguments({ cmd: "dir", cwd: "C:\\" }), {
+    command: "```sh\ndir\n```",
+    rest: '```json\n{\n  "cwd": "C:\\\\"\n}\n```',
+  });
+  assert.deepEqual(describeArguments({ path: "a.txt" }), {
+    rest: '```json\n{\n  "path": "a.txt"\n}\n```',
+  });
+  assert.deepEqual(describeArguments(["a", "b"]), {
+    rest: '```json\n[\n  "a",\n  "b"\n]\n```',
+  });
+  assert.deepEqual(describeArguments("plain text"), { command: "```\nplain text\n```" });
+  assert.deepEqual(describeArguments('{"command":"ls"}'), { command: "```sh\nls\n```" });
+});
+
+test("collapseReason keeps one language of a duplicated host message", () => {
+  assert.equal(collapseReason(undefined), "");
+  assert.equal(collapseReason("  "), "");
+  assert.equal(
+    collapseReason(
+      "Auto review denied this call: nope\n\nAuto review 拒绝了此调用：nope",
+    ),
+    "Auto review 拒绝了此调用：nope",
+  );
+  // Distinct halves are both kept: they are not the same message.
+  assert.equal(
+    collapseReason("Auto review denied this call: a\n\nAuto review 拒绝了此调用：b"),
+    "Auto review denied this call: a\n\nAuto review 拒绝了此调用：b",
+  );
+  assert.equal(
+    collapseReason("line with trailing space   \n\n\n\nnext"),
+    "line with trailing space\n\nnext",
+  );
+});
+
+test("foldReason bounds reviewer text and says how much was folded", () => {
+  const short = "a".repeat(100);
+  assert.equal(foldReason(short), short);
+  const long = "H".repeat(600) + "M".repeat(600) + "T".repeat(600);
+  const folded = foldReason(long);
+  assert.ok(folded.length <= 1200 + 80, `length ${folded.length}`);
+  assert.match(folded, /折叠/);
+  assert.match(folded, /^H/, "the head survives");
+  assert.match(folded, /T$/, "the tail survives: gateways put the error code there");
+  assert.equal(foldReason(long, 100).length <= 180, true);
+});
+
+test("qwen3GuardVerdict extracts the label block", () => {
+  assert.deepEqual(qwen3GuardVerdict("Qwen3Guard: Unsafe (categories: Violent, PII)"), {
+    verdict: "Safety: Unsafe\nCategories: Violent, PII",
+    remainder: "",
+  });
+  assert.deepEqual(qwen3GuardVerdict("Qwen3Guard: safe (no category)"), {
+    verdict: "Safety: Safe\nCategories: None",
+    remainder: "",
+  });
+  assert.deepEqual(
+    qwen3GuardVerdict("Auto review 拒绝了此调用：Qwen3Guard: Controversial (categories: Other) — 需要你确认"),
+    {
+      verdict: "Safety: Controversial\nCategories: Other",
+      remainder: "需要你确认",
+    },
+  );
+  assert.deepEqual(qwen3GuardVerdict("Qwen3Guard returned no Safety label: weird payload"), {
+    verdict: "Safety: (no label returned)\nCategories: (unknown)",
+    remainder: "weird payload",
+  });
+  assert.equal(qwen3GuardVerdict("Auto review rejected tool \"bash\""), undefined);
+  assert.equal(qwen3GuardVerdict(undefined), undefined);
+});
+
+test("a Qwen3Guard verdict renders as one fenced block, not prose", () => {
+  const detail = reviewQuestion(exec, askGate).questions[0].detail;
+  assert.match(detail, /\*\*Verdict \/ 审查结论:\*\*\n\n```\nSafety: Unsafe\nCategories: None\n```/);
+  // No remainder, so no note section is appended.
+  assert.doesNotMatch(detail, /Note \/ 补充说明/);
+  // A plain JSON denial has no verdict section at all.
+  assert.doesNotMatch(
+    reviewQuestion(exec, { ...deniedGate, info: { ...deniedGate.info, reason: "too risky" } })
+      .questions[0].detail,
+    /Verdict \/ 审查结论/,
+  );
+  // A failed reviewer shows its error, never a verdict block.
+  const failed = reviewQuestion(exec, failedGate).questions[0].detail;
+  assert.doesNotMatch(failed, /Verdict \/ 审查结论/);
+  assert.match(failed, /\*\*Reason \/ 原因:\*\*/);
+});
+
+test("a huge reviewer reason is folded, and the command survives intact", () => {
+  const command = `rm -rf /tmp/x && echo ${"v".repeat(3000)}`;
+  const gate = {
+    kind: "deny",
+    reason: `Auto review rejected tool "bash"; its body was not executed`,
+    info: {
+      code: "AUTO_REVIEW_DENIED",
+      reason: `${"L".repeat(4000)}\n\n[the end of the reviewer text]`,
+    },
+  };
+  const detail = reviewQuestion({ ...exec, arguments: { command } }, gate).questions[0].detail;
+  assert.ok(detail.length < 7000, `detail length ${detail.length}`);
+  assert.match(detail, /已折叠/, "the folded span is reported");
+  assert.match(detail, /\[the end of the reviewer text\]/, "the tail survives");
+  assert.ok(detail.includes(command), "the command is never truncated");
 });
 
 test("only the explicit allow option allows", () => {

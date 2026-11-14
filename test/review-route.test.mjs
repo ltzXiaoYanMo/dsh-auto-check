@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   adaptQwen3GuardStream,
+  fitReviewTexts,
   isReviewRequest,
   qwen3GuardDecision,
   qwen3GuardRequest,
   resolveReviewProtocol,
   routeReview,
+  withReasonPolicy,
+  NO_LABEL_REASON,
+  NO_LABEL_RETRIED_REASON,
+  QWEN3GUARD_RETRY_CHARS,
   REVIEW_POLICY_PREFIX,
+  REASON_POLICY_MARKER,
   truncateReviewText,
 } from "../lib/review-route.js";
 
@@ -56,12 +62,13 @@ test("a review request is dispatched to the configured route", () => {
   assert.deepEqual(received, {
     provider: "cheap",
     model: "mini",
-    system: policy,
+    system: withReasonPolicy(policy),
     messages: [],
     temperature: 0,
   });
   assert.notEqual(received, request);
   assert.equal(request.provider, "main-provider", "frozen request is not mutated");
+  assert.equal(request.system, policy, "frozen request keeps the shipped policy");
 });
 
 test("the re-entered copy passes through to the adapter", () => {
@@ -88,7 +95,7 @@ test("the re-entered copy passes through to the adapter", () => {
   assert.equal(outerNext, 0);
 });
 
-test("an incomplete or identical route follows the main model", () => {
+test("an incomplete route keeps the main model but still takes the reasoning policy", () => {
   const request = Object.freeze({
     provider: "main-provider",
     model: "main-model",
@@ -101,19 +108,70 @@ test("an incomplete or identical route follows the main model", () => {
     { provider: "", model: "mini" },
     { provider: "  ", model: "mini" },
   ]) {
-    let dispatched = 0;
-    assert.equal(routeReview(request, route, () => (dispatched += 1)), undefined);
-    assert.equal(dispatched, 0);
+    let received;
+    routeReview(request, route, (next) => {
+      received = next;
+    });
+    assert.equal(received.provider, "main-provider", JSON.stringify(route));
+    assert.equal(received.model, "main-model", JSON.stringify(route));
+    assert.equal(received.system, withReasonPolicy(policy));
   }
 
+  // With the option off an incomplete route is a pure pass-through again.
   let dispatched = 0;
   assert.equal(
-    routeReview(request, { provider: "main-provider", model: "main-model" }, () => {
-      dispatched += 1;
-    }),
+    routeReview(request, { provider: "", model: "", reasonPolicy: false }, () => (dispatched += 1)),
     undefined,
   );
   assert.equal(dispatched, 0);
+});
+
+test("the identical route still takes the reasoning policy", () => {
+  const request = Object.freeze({
+    provider: "main-provider",
+    model: "main-model",
+    system: policy,
+    messages: [],
+  });
+  const route = { provider: "main-provider", model: "main-model" };
+  let received;
+  routeReview(request, route, (next) => {
+    received = next;
+  });
+  assert.equal(received.system, withReasonPolicy(policy));
+
+  // Once the policy is there, a re-entered copy is left alone.
+  let again = 0;
+  routeReview(received, route, () => (again += 1));
+  assert.equal(again, 0);
+
+  // Turning the option off restores the shipped behaviour.
+  let off = 0;
+  assert.equal(
+    routeReview(request, { ...route, reasonPolicy: false }, () => (off += 1)),
+    undefined,
+  );
+  assert.equal(off, 0);
+});
+
+test("the reasoning policy is appended once, after the shipped policy", () => {
+  assert.equal(withReasonPolicy("You are a coding agent."), "You are a coding agent.");
+  assert.equal(withReasonPolicy(undefined), undefined);
+
+  const once = withReasonPolicy(policy);
+  assert.ok(once.startsWith(policy), "the shipped policy stays first");
+  assert.match(once, new RegExp(REASON_POLICY_MARKER));
+  assert.equal(withReasonPolicy(once), once, "idempotent");
+
+  const addendum = once.slice(policy.length);
+  assert.match(addendum, /简体中文/);
+  assert.match(addendum, /这次操作会做什么/);
+  assert.match(addendum, /为什么拒绝/);
+  assert.match(addendum, /Every deny object must carry reason/);
+  // The addendum must not smuggle a new JSON shape into the prompt: the host
+  // counts the members of the returned object.
+  assert.doesNotMatch(addendum, /\{"risk"/);
+  assert.doesNotMatch(addendum, /"reason":\s*"/);
 });
 
 test("Qwen3Guard protocol is auto-detected from the target model", () => {
@@ -298,4 +356,101 @@ test("a Qwen3Guard route adapts even when it equals the main model", async () =>
     decision: "allow",
   });
   assert.deepEqual(chunks.at(-1), { type: "finish", reason: { kind: "stop" } });
+});
+
+test("a degenerate answer becomes a readable rejection, never raw tokens", async () => {
+  const garbage = "</endoftext>" + " </BEG>".repeat(60);
+  async function* native() {
+    yield { type: "text-delta", index: 0, text: garbage };
+    yield { type: "finish", reason: { kind: "stop" } };
+  }
+
+  const chunks = [];
+  for await (const chunk of adaptQwen3GuardStream(native())) chunks.push(chunk);
+  const decision = JSON.parse(chunks[1].text);
+  assert.equal(decision.risk, "high");
+  assert.equal(decision.decision, "deny");
+  assert.equal(decision.reason, NO_LABEL_REASON);
+  assert.doesNotMatch(decision.reason, /BEG|endoftext/);
+  assert.ok(decision.reason.length < 200);
+});
+
+test("an unlabelled answer is retried on a smaller prompt and its label is used", async () => {
+  const request = Object.freeze({
+    provider: "main-provider",
+    model: "main-model",
+    system: policy,
+    messages: [
+      { role: "user", content: [{ type: "text", text: 'ENVIRONMENT\n{"cwd":"C:\\\\w"}' }] },
+      { role: "user", content: [{ type: "text", text: "earlier history ".repeat(1200) }] },
+      { role: "user", content: [{ type: "text", text: "PENDING Remove-Item -Recurse -Force .\\tmp" }] },
+    ],
+  });
+
+  const seen = [];
+  const streams = [
+    async function* () {
+      yield { type: "text-delta", index: 0, text: "the user is asking about" };
+      yield { type: "finish", reason: { kind: "stop" } };
+    },
+    async function* () {
+      yield { type: "text-delta", index: 0, text: "Safety: Safe\nCategories: None" };
+      yield { type: "finish", reason: { kind: "stop" } };
+    },
+  ];
+  const result = routeReview(
+    request,
+    { provider: "guard", model: "Qwen3Guard-Gen-4B", maxInputChars: 24000 },
+    (next) => {
+      seen.push(next);
+      return streams[seen.length - 1]();
+    },
+  );
+
+  const chunks = [];
+  for await (const chunk of result) chunks.push(chunk);
+  assert.equal(seen.length, 2, "the first answer had no label, so one retry runs");
+  const retried = seen[1].messages[0].content[0].text;
+  assert.ok(retried.length <= QWEN3GUARD_RETRY_CHARS, "the retry shrinks the prompt");
+  assert.ok(retried.length < seen[0].messages[0].content[0].text.length);
+  assert.deepEqual(JSON.parse(chunks[1].text), { risk: "low", decision: "allow" });
+  assert.deepEqual(chunks.at(-1), { type: "finish", reason: { kind: "stop" } });
+});
+
+test("a retry that also fails says so instead of quoting the model", async () => {
+  const request = Object.freeze({
+    provider: "main-provider",
+    model: "main-model",
+    system: policy,
+    messages: [{ role: "user", content: [{ type: "text", text: "ENVIRONMENT\n{}" }] }],
+  });
+  const garbage = () =>
+    (async function* () {
+      yield { type: "text-delta", index: 0, text: "</BEG>".repeat(20) };
+      yield { type: "finish", reason: { kind: "stop" } };
+    })();
+
+  const result = routeReview(
+    request,
+    { provider: "guard", model: "Qwen3Guard-Gen-4B" },
+    () => garbage(),
+  );
+  const chunks = [];
+  for await (const chunk of result) chunks.push(chunk);
+  const decision = JSON.parse(chunks[1].text);
+  assert.equal(decision.reason, NO_LABEL_RETRIED_REASON);
+  assert.deepEqual(chunks.at(-1), { type: "finish", reason: { kind: "stop" } });
+});
+
+test("fitReviewTexts keeps the environment and the pending call, drops old history", () => {
+  const env = 'ENVIRONMENT\n{"cwd":"C:\\\\w"}';
+  const pending = "PENDING " + "p".repeat(200);
+  const parts = [env, "h1 ".repeat(200), "h2 ".repeat(200), "h3 ".repeat(200), pending];
+
+  const fitted = fitReviewTexts(parts, 1200);
+  assert.ok(fitted.length <= 1200, "result stays inside the budget");
+  assert.ok(fitted.startsWith(env), "the environment header survives");
+  assert.ok(fitted.endsWith(pending), "the pending call survives intact");
+  assert.match(fitted, /earlier history message\(s\) dropped/);
+  assert.doesNotMatch(fitted, /h1/);
 });
