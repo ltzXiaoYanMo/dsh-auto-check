@@ -2,3 +2,11 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# editor / tooling
+.idea/
+.codegraph/
+
+# local probes & scratch
+.tmp-*
+undefined/

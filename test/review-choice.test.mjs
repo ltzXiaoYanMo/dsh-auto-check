@@ -16,6 +16,7 @@ import {
   isReviewDenial,
   keepOutermost,
   qwen3GuardVerdict,
+  reasonText,
   resolveChoice,
   reviewDenialKind,
   reviewQuestion,
@@ -215,21 +216,67 @@ test("qwen3GuardVerdict extracts the label block", () => {
   assert.equal(qwen3GuardVerdict(undefined), undefined);
 });
 
-test("a Qwen3Guard verdict renders as one fenced block, not prose", () => {
-  const detail = reviewQuestion(exec, askGate).questions[0].detail;
-  assert.match(detail, /\*\*Verdict \/ 审查结论:\*\*\n\n```\nSafety: Unsafe\nCategories: None\n```/);
-  // No remainder, so no note section is appended.
-  assert.doesNotMatch(detail, /Note \/ 补充说明/);
-  // A plain JSON denial has no verdict section at all.
-  assert.doesNotMatch(
-    reviewQuestion(exec, { ...deniedGate, info: { ...deniedGate.info, reason: "too risky" } })
-      .questions[0].detail,
-    /Verdict \/ 审查结论/,
+test("reasonText folds a Qwen3Guard verdict into one reason body", () => {
+  assert.equal(reasonText(undefined), "");
+  assert.equal(reasonText("too risky"), "too risky");
+  assert.equal(
+    reasonText("Qwen3Guard: Unsafe (categories: Violent)"),
+    "Safety: Unsafe\nCategories: Violent",
   );
-  // A failed reviewer shows its error, never a verdict block.
+  assert.equal(
+    reasonText("Qwen3Guard: Controversial (categories: Other) — 需要你确认"),
+    "Safety: Controversial\nCategories: Other\n\n需要你确认",
+  );
+  // qwen3GuardVerdict stays exported for callers that want the split fields.
+  assert.deepEqual(qwen3GuardVerdict("Qwen3Guard: Unsafe (no category)"), {
+    verdict: "Safety: Unsafe\nCategories: None",
+    remainder: "",
+  });
+});
+
+test("every denial kind renders one Reason section, no verdict block", () => {
+  // Qwen3Guard: the verdict leads the quoted reason instead of a fenced block.
+  const detail = reviewQuestion(exec, askGate).questions[0].detail;
+  assert.match(detail, /\*\*Reason \/ 原因:\*\*\n\n> Safety: Unsafe\n> Categories: None/);
+  assert.doesNotMatch(detail, /Verdict \/ 审查结论/);
+  assert.doesNotMatch(detail, /Note \/ 补充说明/);
+  assert.doesNotMatch(detail, /```/);
+  // The remainder of the reviewer sentence follows the verdict in the same quote.
+  const withNote = reviewQuestion(exec, {
+    kind: "deny",
+    reason: "Auto review rejected tool \"bash\"; its body was not executed",
+    info: {
+      code: "AUTO_REVIEW_DENIED",
+      reason: "Qwen3Guard: Controversial (categories: Other) — 需要你确认",
+    },
+  }).questions[0].detail;
+  assert.match(withNote, /> Safety: Controversial\n> Categories: Other\n> \n> 需要你确认/);
+  assert.doesNotMatch(withNote, /Note \/ 补充说明/);
+  // A failed reviewer shows its error, never a verdict.
   const failed = reviewQuestion(exec, failedGate).questions[0].detail;
   assert.doesNotMatch(failed, /Verdict \/ 审查结论/);
+  assert.doesNotMatch(failed, /Safety:/);
   assert.match(failed, /\*\*Reason \/ 原因:\*\*/);
+});
+
+test("all denial kinds share one fixed section order", () => {
+  const withArgs = { ...exec, arguments: { command: "ls", cwd: "C:\\" } };
+  for (const gate of [deniedGate, failedGate, askGate]) {
+    const detail = reviewQuestion(withArgs, gate).questions[0].detail;
+    const order = [
+      /^The reviewer model/,
+      /\*\*Tool \/ 工具:\*\* `bash`/,
+      /\*\*Command \/ 命令:\*\*/,
+      /\*\*Arguments \/ 参数:\*\*/,
+      /\*\*Reason \/ 原因:\*\*/,
+      /Allowing runs this one call now with full access/,
+    ].map((pattern) => {
+      const at = detail.search(pattern);
+      assert.notEqual(at, -1, `${pattern} missing for ${gate.kind}`);
+      return at;
+    });
+    assert.deepEqual([...order].sort((a, b) => a - b), order, `${gate.kind} order`);
+  }
 });
 
 test("a huge reviewer reason is folded, and the command survives intact", () => {
@@ -291,25 +338,68 @@ test("a denial becomes a question; allow-once allows", async () => {
   }
 });
 
-test("keep-denied returns the original gate", async () => {
-  for (const gate of [deniedGate, failedGate, askGate]) {
+test("keep-denied returns the original gate, except an ask gate which becomes terminal", async () => {
+  for (const gate of [deniedGate, failedGate]) {
     const { listener } = listenerWith({ ask: () => answerWith(KEEP_DENIED_LABEL) });
     assert.equal(await listener(exec, async () => gate), gate);
   }
+  // An ask gate asked the user here, so it must not fall back to the host's
+  // approval card: returning it unchanged would prompt a second time.
+  const { listener } = listenerWith({ ask: () => answerWith(KEEP_DENIED_LABEL) });
+  const hardened = await listener(exec, async () => askGate);
+  assert.equal(hardened.kind, "deny");
+  assert.equal(hardened.info.code, AUTO_REVIEW_DENIED_CODE);
+  assert.equal(hardened.info.name, "AutoReviewDeniedError");
+  assert.equal(hardened.reason, 'Auto review rejected tool "bash"; its body was not executed');
+  assert.equal(hardened.info.reason, "Safety: Unsafe\nCategories: None");
+  assert.equal(reviewDenialKind(hardened), "denied", "a terminal denial, not another ask");
+  assert.equal(hardened.displayReason, undefined, "the host card must not be able to ask again");
 });
 
-test("fail closed: every ask failure keeps the original denial", async () => {
+test("an ask gate is asked here, once, with the full card", async () => {
+  const withArgs = { ...exec, arguments: { command: "rm -rf build", cwd: "C:\\repo" } };
+  const { listener, asked } = listenerWith({ ask: () => answerWith(KEEP_DENIED_LABEL) });
+  await listener(withArgs, async () => askGate);
+  assert.equal(asked.length, 1, "exactly one prompt");
+  const detail = asked[0].questions[0].detail;
+  assert.match(detail, /\*\*Command \/ 命令:\*\*/);
+  assert.match(detail, /rm -rf build/);
+  assert.match(detail, /\*\*Arguments \/ 参数:\*\*/);
+  assert.match(detail, /\*\*Reason \/ 原因:\*\*\n\n> Safety: Unsafe\n> Categories: None/);
+  // The approval policy is no longer consulted: every denial kind asks here.
+  const aggressive = listenerWith({ ask: () => answerWith(ALLOW_ONCE_LABEL), policy: "ask" });
+  assert.deepEqual(await aggressive.listener(exec, async () => askGate), { kind: "allow" });
+  assert.equal(aggressive.asked.length, 1);
+});
+
+test("fail closed: a prompt that never happened keeps the original denial", async () => {
   const failures = ["NO_PROVIDER", "ASK_CANCELLED", "ASK_ABORTED", "CALLER_NOT_LIVE"].map(
     (code) => () => {
       throw Object.assign(new Error(code), { code });
     },
   );
-  failures.push(() => undefined, () => ({ answers: [] }), () => answerWith());
   for (const ask of failures) {
     for (const gate of [deniedGate, failedGate, askGate]) {
       const { listener } = listenerWith({ ask });
+      // The user never saw a card, so the gate must stay exactly as Auto review
+      // produced it: the host approval path is still the right fallback.
       assert.equal(await listener(exec, async () => gate), gate);
     }
+  }
+});
+
+test("fail closed: a card the user dismissed still denies, never allows", async () => {
+  const dismissals = [() => undefined, () => ({ answers: [] }), () => answerWith()];
+  for (const ask of dismissals) {
+    for (const gate of [deniedGate, failedGate]) {
+      const { listener } = listenerWith({ ask });
+      assert.equal(await listener(exec, async () => gate), gate);
+    }
+    // An ask gate cannot be handed back unchanged, or the host would ask again.
+    const { listener } = listenerWith({ ask });
+    const denied = await listener(exec, async () => askGate);
+    assert.equal(denied.kind, "deny");
+    assert.equal(denied.info.code, AUTO_REVIEW_DENIED_CODE);
   }
 });
 
@@ -337,10 +427,6 @@ test("passes through when it cannot or must not ask", async () => {
   // No agent: nobody to ask.
   probe = listenerWith({ ask });
   assert.equal(await probe.listener({ name: "bash" }, async () => deniedGate), deniedGate);
-  assert.equal(probe.asked.length, 0);
-  // `ask` under the `ask` policy: the approval card already asks the user.
-  probe = listenerWith({ policy: "ask", ask });
-  assert.equal(await probe.listener(exec, async () => askGate), askGate);
   assert.equal(probe.asked.length, 0);
   // Unrelated results are untouched.
   probe = listenerWith({ ask });
