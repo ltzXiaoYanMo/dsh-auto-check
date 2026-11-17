@@ -8,12 +8,15 @@ import {
   KEEP_DENIED_LABEL,
   REVIEW_CHOICE_QUESTION_ID,
   REVIEWER_TIMEOUT_CODE,
+  allowOnceLabel,
   collapseReason,
   createReviewChoiceListener,
+  denialReason,
   describeArguments,
   foldReason,
   formatArguments,
   isReviewDenial,
+  keepDeniedLabel,
   keepOutermost,
   qwen3GuardVerdict,
   reasonText,
@@ -312,10 +315,126 @@ test("only the explicit allow option allows", () => {
   assert.equal(resolveChoice({ answers: [{ id: "other", selected: [ALLOW_ONCE_LABEL] }, {}] }), "deny");
 });
 
-function listenerWith({ onBlock = "ask", ask, policy = "never", questions = true } = {}) {
+// --- card language ---------------------------------------------------------
+
+test("option labels follow the card language", () => {
+  assert.equal(keepDeniedLabel("zh"), "维持拒绝（推荐）");
+  assert.equal(keepDeniedLabel("en"), "Keep denied (recommended)");
+  assert.equal(keepDeniedLabel(undefined), KEEP_DENIED_LABEL);
+  assert.equal(allowOnceLabel("zh"), "仍要执行（放行一次）");
+  assert.equal(allowOnceLabel("en"), "Allow once");
+  assert.equal(allowOnceLabel(undefined), ALLOW_ONCE_LABEL);
+});
+
+test("denialReason picks one language of a displayReason pair", () => {
+  assert.equal(denialReason(askGate, "zh"), askGate.displayReason.zh);
+  assert.equal(denialReason(askGate, "en"), askGate.displayReason.en);
+  assert.equal(
+    denialReason(askGate),
+    [askGate.displayReason.en, askGate.displayReason.zh].join("\n\n"),
+    "unknown language keeps the bilingual join",
+  );
+  // A missing chosen entry falls back to the other language.
+  assert.equal(
+    denialReason({ kind: "ask", reason: "x", displayReason: { zh: "中文" } }, "en"),
+    "中文",
+  );
+  assert.equal(
+    denialReason({ kind: "ask", reason: "x", displayReason: { en: "English" } }, "zh"),
+    "English",
+  );
+});
+
+test("collapseReason keeps the half matching the card language", () => {
+  const duplicated = "Auto review denied this call: nope\n\nAuto review 拒绝了此调用：nope";
+  assert.equal(collapseReason(duplicated, "zh"), "Auto review 拒绝了此调用：nope");
+  assert.equal(collapseReason(duplicated, "en"), "Auto review denied this call: nope");
+  assert.equal(collapseReason(duplicated), "Auto review 拒绝了此调用：nope");
+  // The halves resolve by script, not by position.
+  const reversed = "Auto review 拒绝了此调用：nope\n\nAuto review denied this call: nope";
+  assert.equal(collapseReason(reversed, "zh"), "Auto review 拒绝了此调用：nope");
+  assert.equal(collapseReason(reversed, "en"), "Auto review denied this call: nope");
+});
+
+test("the card speaks one language when the viewer locale is known", () => {
+  const [zhQuestion] = reviewQuestion(exec, askGate, undefined, "zh").questions;
+  assert.equal(zhQuestion.question, '仍要执行工具 "bash" 吗？');
+  assert.equal(zhQuestion.options[0].label, "维持拒绝（推荐）");
+  assert.equal(zhQuestion.options[1].label, "仍要执行（放行一次）");
+  assert.equal(zhQuestion.options[0].description, "不执行，代理收到原拒绝结果。");
+  assert.equal(zhQuestion.options[1].description, "越过审查，只执行这一次。");
+  assert.match(zhQuestion.detail, /审查模型拒绝了此工具调用。/);
+  assert.match(zhQuestion.detail, /\*\*工具:\*\* `bash`/);
+  assert.match(zhQuestion.detail, /\*\*原因:\*\*\n\n> Safety: Unsafe/);
+  assert.match(zhQuestion.detail, /放行只执行这一次调用，不会放行其他调用。/);
+  // No English sentence, no bilingual " / " separator.
+  assert.doesNotMatch(zhQuestion.detail, /reviewer model/);
+  assert.doesNotMatch(zhQuestion.detail, / \/ /);
+
+  const [enQuestion] = reviewQuestion(exec, askGate, undefined, "en").questions;
+  assert.equal(enQuestion.question, 'Run tool "bash" anyway?');
+  assert.equal(enQuestion.options[0].label, "Keep denied (recommended)");
+  assert.equal(enQuestion.options[1].label, "Allow once");
+  assert.equal(enQuestion.options[0].description, "Do not run it; the agent sees the original denial.");
+  assert.match(enQuestion.detail, /The reviewer model blocked this tool call\./);
+  assert.match(enQuestion.detail, /\*\*Tool:\*\* `bash`/);
+  assert.match(enQuestion.detail, /\*\*Reason:\*\*\n\n> Safety: Unsafe/);
+  assert.match(enQuestion.detail, /Allowing runs this one call now with full access/);
+  assert.doesNotMatch(enQuestion.detail, /审查模型/);
+  assert.doesNotMatch(enQuestion.detail, / \/ /);
+
+  // Sections take the language too, with the command untouched.
+  const withArgs = { ...exec, arguments: { command: "ls", cwd: "C:\\" } };
+  assert.match(reviewQuestion(withArgs, deniedGate, undefined, "zh").questions[0].detail, /\*\*命令:\*\*/);
+  assert.match(reviewQuestion(withArgs, deniedGate, undefined, "zh").questions[0].detail, /\*\*参数:\*\*/);
+  assert.match(reviewQuestion(withArgs, deniedGate, undefined, "en").questions[0].detail, /\*\*Command:\*\*/);
+  assert.match(reviewQuestion(withArgs, deniedGate, undefined, "en").questions[0].detail, /\*\*Arguments:\*\*/);
+
+  // The failed headline and both clip and fold notes follow as well.
+  assert.match(reviewQuestion(exec, failedGate, undefined, "zh").questions[0].detail, /审查模型没有响应（出错或超时）。/);
+  assert.doesNotMatch(reviewQuestion(exec, failedGate, undefined, "zh").questions[0].detail, /error or timeout/);
+  const longRest = formatArguments({ command: "ls", note: "y".repeat(5000) }, "zh");
+  assert.match(longRest, /另有 \d+ 个字符未显示/);
+  assert.doesNotMatch(longRest, /more chars/);
+  assert.match(foldReason("H".repeat(600) + "M".repeat(600) + "T".repeat(600), 100, "en"), /more chars folded/);
+  assert.doesNotMatch(foldReason("H".repeat(600) + "M".repeat(600) + "T".repeat(600), 100, "en"), /折叠/);
+});
+
+test("a resolved language drives both the card and the answer check", async () => {
+  const { listener, asked } = listenerWith({
+    language: "zh",
+    ask: (request) => answerWith(request.questions[0].options[1].label),
+  });
+  assert.deepEqual(await listener(exec, async () => deniedGate), { kind: "allow" });
+  const [question] = asked[0].questions;
+  assert.equal(question.options[1].label, allowOnceLabel("zh"));
+  assert.equal(question.question, '仍要执行工具 "bash" 吗？');
+
+  // Once the card is Chinese, only its own allow label allows: the bilingual
+  // label is no longer the label the user saw.
+  const stale = listenerWith({ language: "zh", ask: () => answerWith(ALLOW_ONCE_LABEL) });
+  assert.equal((await stale.listener(exec, async () => deniedGate)).kind, "deny");
+
+  // A language resolver that fails must not block the ask.
+  const broken = listenerWith({
+    language: () => {
+      throw new Error("boom");
+    },
+    ask: () => answerWith(ALLOW_ONCE_LABEL),
+  });
+  assert.deepEqual(await broken.listener(exec, async () => deniedGate), { kind: "allow" });
+});
+
+function listenerWith({ onBlock = "ask", ask, policy = "never", questions = true, language } = {}) {
   const asked = [];
   const listener = createReviewChoiceListener({
     onBlock: () => onBlock,
+    language:
+      language === undefined
+        ? undefined
+        : typeof language === "function"
+          ? language
+          : () => language,
     userQuestions: () =>
       questions
         ? {
@@ -329,6 +448,32 @@ function listenerWith({ onBlock = "ask", ask, policy = "never", questions = true
   });
   return { listener, asked };
 }
+
+test("ask_user_question bypasses the review-choice gate", async () => {
+  const { listener, asked } = listenerWith({ ask: () => answerWith(ALLOW_ONCE_LABEL) });
+  let nextCalled = false;
+  const result = await listener(
+    { ...exec, name: "ask_user_question" },
+    async () => {
+      nextCalled = true;
+      return deniedGate;
+    },
+  );
+  assert.deepEqual(result, { kind: "allow" });
+  assert.equal(nextCalled, false, "the Auto review gate is skipped");
+  assert.equal(asked.length, 0, "no redundant review-choice card");
+});
+
+test("other tools still pass through the review gate", async () => {
+  const { listener } = listenerWith({ ask: () => answerWith(ALLOW_ONCE_LABEL) });
+  let nextCalled = false;
+  const result = await listener(exec, async () => {
+    nextCalled = true;
+    return { kind: "allow" };
+  });
+  assert.equal(nextCalled, true);
+  assert.deepEqual(result, { kind: "allow" });
+});
 
 test("a denial becomes a question; allow-once allows", async () => {
   for (const gate of [deniedGate, failedGate, askGate]) {
