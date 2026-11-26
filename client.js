@@ -54,6 +54,14 @@ window.__ModuleLoader__.load({
       protocolJson: "标准 JSON（通用模型）",
       protocolQwen3Guard: "Qwen3Guard 安全分级",
       protocolHint: "Qwen3Guard 模式会去掉 auto review 的 JSON 策略，把待审内容作为用户消息发送，并把 Safety 标签映射为风险等级：Safe 放行，Controversial / Unsafe 拒绝。",
+      scope: "审查范围",
+      scopeSensitive: "仅敏感操作（默认）",
+      scopeAll: "所有工具调用（原有行为）",
+      scopeHint: "「仅敏感操作」只审查：访问项目外的文件、修改项目外文件或 .env / 项目内配置文件、运行 pwsh/bash，以及下方可选的联网与 MCP 调用。查看项目内普通文件、修改项目内普通代码直接放行；选择「所有工具调用」恢复每次调用都审查。",
+      reviewInternet: "审查联网访问",
+      reviewInternetHint: "开启后，web_search / web_fetch / research 等访问 Internet 的调用也交给审查模型。仅在「仅敏感操作」下生效。",
+      reviewMcp: "审查 MCP 调用",
+      reviewMcpHint: "开启后，mcp__* 工具与 MCP 资源读取也交给审查模型。仅在「仅敏感操作」下生效。",
       chineseReason: "拒绝原因用中文说明",
       chineseReasonHint: "在标准 JSON 策略后追加一段要求：每次拒绝都必须带上中文 reason，先说清这次操作会做什么，再说清为什么拒绝。关闭后使用 auto review 的原始英文策略。",
       protocolWarning: "Controversial 按中风险拒绝。按下方「审查拒绝时」的设置，默认会弹出问题让你选择放行一次或维持拒绝（审批策略为 never 时同样如此）。",
@@ -94,6 +102,14 @@ window.__ModuleLoader__.load({
       protocolJson: "Standard JSON (general models)",
       protocolQwen3Guard: "Qwen3Guard safety grading",
       protocolHint: "Qwen3Guard mode removes auto review's JSON policy, sends the pending content as the user message, and maps the Safety label to a risk level: Safe allows; Controversial / Unsafe deny.",
+      scope: "Review scope",
+      scopeSensitive: "Sensitive operations only (default)",
+      scopeAll: "Every tool call (original behaviour)",
+      scopeHint: "\"Sensitive operations only\" reviews: reads outside the project, writes outside the project or to .env / in-project config files, pwsh/bash, and the optional Internet and MCP calls below. Ordinary project reads and non-config project writes run without review. \"Every tool call\" restores review before every call.",
+      reviewInternet: "Review Internet access",
+      reviewInternetHint: "When on, web_search / web_fetch / research and other Internet calls are reviewed. Only applies to \"Sensitive operations only\".",
+      reviewMcp: "Review MCP calls",
+      reviewMcpHint: "When on, mcp__* tools and MCP resource reads are reviewed. Only applies to \"Sensitive operations only\".",
       chineseReason: "Explain denials in Chinese",
       chineseReasonHint: "Appends a requirement to the standard JSON policy: every denial must carry a Chinese reason that first states what the operation would do and then why it is denied. Turn it off to use auto review's original English policy.",
       protocolWarning: "Controversial is denied as medium risk. With \"When review blocks\" below set to ask (the default), you are asked to allow it once or keep it denied, including under the `never` approval policy.",
@@ -136,12 +152,23 @@ window.__ModuleLoader__.load({
       constructor(ctx, scope) {
         this.ctx = ctx;
         this.form = new SettingsFormModel(scope, [
+          settingsTextField("scope"),
           settingsTextField("provider"),
           settingsTextField("model"),
           settingsTextField("protocol"),
           settingsNumberField("maxInputChars"),
           settingsTextField("onBlock"),
           settingsNumberField("reviewTimeoutMs"),
+          {
+            field: "reviewInternet",
+            format: (value) => (value === false ? "false" : "true"),
+            parse: (text) => ({ kind: "set", value: text !== "false" }),
+          },
+          {
+            field: "reviewMcp",
+            format: (value) => (value === false ? "false" : "true"),
+            parse: (text) => ({ kind: "set", value: text !== "false" }),
+          },
           {
             field: "compatMode",
             format: (value) => (value === true ? "true" : "false"),
@@ -164,12 +191,15 @@ window.__ModuleLoader__.load({
       projection() {
         return {
           ...this.form.shell(),
+          scope: this.form.field("scope"),
           provider: this.form.field("provider"),
           model: this.form.field("model"),
           protocol: this.form.field("protocol"),
           maxInputChars: this.form.field("maxInputChars"),
           onBlock: this.form.field("onBlock"),
           reviewTimeoutMs: this.form.field("reviewTimeoutMs"),
+          reviewInternet: this.form.field("reviewInternet"),
+          reviewMcp: this.form.field("reviewMcp"),
           compatMode: this.form.field("compatMode"),
           chineseReason: this.form.field("chineseReason"),
           groups: this.groups,
@@ -262,6 +292,12 @@ window.__ModuleLoader__.load({
       const onBlock =
         (state.onBlock?.text ?? "").trim().toLowerCase() === "deny" ? "deny" : "ask";
       const chineseReason = (state.chineseReason?.text ?? "true") !== "false";
+      const scope =
+        (state.scope?.text ?? "").trim().toLowerCase() === "all"
+          ? "all"
+          : "sensitive";
+      const reviewInternet = (state.reviewInternet?.text ?? "true") !== "false";
+      const reviewMcp = (state.reviewMcp?.text ?? "true") !== "false";
       const current = provider !== "" && model !== "" ? provider + SEP + model : "";
       const routes = new Set();
       for (const group of state.groups) {
@@ -327,6 +363,87 @@ window.__ModuleLoader__.load({
         onDiscard: props.discard,
         children: jsxs("div", {
           children: [
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsx("label", {
+                  className: "dshAutoCheckLabel",
+                  htmlFor: "dsh-auto-check-scope",
+                  children: t("scope"),
+                }),
+                jsx("select", {
+                  className: "dshAutoCheckSelect",
+                  id: "dsh-auto-check-scope",
+                  value: scope,
+                  disabled: !state.writable || state.saving,
+                  onChange: (event) => props.edit("scope", event.target.value),
+                  children: [
+                    jsx(
+                      "option",
+                      { value: "sensitive", children: t("scopeSensitive") },
+                      "sensitive",
+                    ),
+                    jsx(
+                      "option",
+                      { value: "all", children: t("scopeAll") },
+                      "all",
+                    ),
+                  ],
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("scopeHint"),
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsxs("label", {
+                  className: "dshAutoCheckCheck",
+                  htmlFor: "dsh-auto-check-review-internet",
+                  children: [
+                    jsx("input", {
+                      id: "dsh-auto-check-review-internet",
+                      type: "checkbox",
+                      checked: reviewInternet,
+                      disabled: !state.writable || state.saving || scope === "all",
+                      onChange: (event) =>
+                        props.edit("reviewInternet", event.target.checked ? "true" : "false"),
+                    }),
+                    jsx("span", { children: t("reviewInternet") }),
+                  ],
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("reviewInternetHint"),
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "dshAutoCheckField",
+              children: [
+                jsxs("label", {
+                  className: "dshAutoCheckCheck",
+                  htmlFor: "dsh-auto-check-review-mcp",
+                  children: [
+                    jsx("input", {
+                      id: "dsh-auto-check-review-mcp",
+                      type: "checkbox",
+                      checked: reviewMcp,
+                      disabled: !state.writable || state.saving || scope === "all",
+                      onChange: (event) =>
+                        props.edit("reviewMcp", event.target.checked ? "true" : "false"),
+                    }),
+                    jsx("span", { children: t("reviewMcp") }),
+                  ],
+                }),
+                jsx("p", {
+                  className: "dshAutoCheckHint",
+                  children: t("reviewMcpHint"),
+                }),
+              ],
+            }),
             jsxs("div", {
               className: "dshAutoCheckField",
               children: [

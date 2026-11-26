@@ -2,7 +2,7 @@
 
 为 DeepSeek Harness 的「自动审查」（Auto review）单独指定审查模型。
 
-自动审查默认跟随当前会话的主模型。主模型如果是价格较高的模型，每次工具调用前的审查都会消耗同样的高价 Token。本插件在 `llm/stream` 层拦截自动审查请求，把它改写到单独配置的 provider / model，其余请求原样放行。
+自动审查默认跟随当前会话的主模型。主模型如果是价格较高的模型，审查请求也会消耗同样的高价 Token。本插件在 `llm/stream` 层拦截自动审查请求，把它改写到单独配置的 provider / model，其余请求原样放行；并可按「审查范围」跳过不敏感的工具调用。
 
 ## 工作方式
 
@@ -17,15 +17,36 @@
 1. 打开 **设置 → 插件**（Plugins）。
 2. 在官方插件列表中找到 **自动审查模型**。
 3. 选择一个审查模型并保存；选择「跟随主模型」可恢复默认行为。
-4. 按需选择「审查协议」：
+4. 选择「审查范围」（`scope`）：
+   - **仅敏感操作（默认）**：只审查项目外文件访问、项目外文件修改、`.env` / 项目内配置文件修改、`pwsh` / `bash` 等命令执行，以及下方可选的联网与 MCP 调用（见「审查范围」一节）。
+   - **所有工具调用（原有行为）**：每次工具调用前都请求审查模型。
+5. 按需开启「审查联网访问」与「审查 MCP 调用」（两者默认开启，仅在「仅敏感操作」下生效）。
+6. 按需选择「审查协议」：
    - **自动识别**（默认）：目标模型名包含 `Qwen3Guard` 时使用 Qwen3Guard 适配，否则使用标准 JSON 协议。
    - **标准 JSON**：要求审查模型严格输出 `{risk, decision, reason?}`，适用于通用模型。
    - **Qwen3Guard 安全分级**：适用于 Qwen3Guard-Gen 系列（0.6B / 4B / 8B）。
-5. 按需设置「审查拒绝时」（`onBlock`）与「审查超时」（`reviewTimeoutMs`），见下一节。
-6. 保持勾选「拒绝原因用中文说明」（默认），让拒绝原因用中文说清这次操作会做什么、为什么拒绝；关闭后使用自带的英文策略原文。
-7. 审查模型走的网关拒绝 `store` 字段时，勾选「兼容模式」（`compatMode`），见「云端 / 兼容网关」一节。
+7. 按需设置「审查拒绝时」（`onBlock`）与「审查超时」（`reviewTimeoutMs`），见下一节。
+8. 保持勾选「拒绝原因用中文说明」（默认），让拒绝原因用中文说清这次操作会做什么、为什么拒绝；关闭后使用自带的英文策略原文。
+9. 审查模型走的网关拒绝 `store` 字段时，勾选「兼容模式」（`compatMode`），见「云端 / 兼容网关」一节。
 
 模型列表来自当前会话可路由的模型目录。打开页面、窗口重新聚焦，以及模型/凭据设置变更时会自动刷新；也可以点击「刷新列表」手动重新拉取。只影响自动审查，不影响主对话或子代理。
+
+## 审查范围（`scope`）
+
+自动审查原本在每次工具调用前都请求审查模型。把「审查范围」设为 **仅敏感操作** 后，只有下面这些调用会进入审查：
+
+- **访问项目外的文件**：`read` / `read_image` / `grep` / `glob` 的路径解析到项目根目录（审查请求里的会话 `cwd`）之外；
+- **修改项目外的文件**：`write` / `edit` 的 `file_path` 在项目外；
+- **修改项目内配置文件**：`.env` 及其变体、`package.json` 与各类 lockfile、`tsconfig*.json`、`config.*` / `settings.*` / `appsettings.*` / `application*.yml`、`*.config.*`、Dockerfile / compose、CI 配置、`.vscode` / `.devcontainer`、`.gitignore` / Makefile 等；
+- **运行命令**：`pwsh` / `bash` / `sh` / `zsh` / `run_command` / `run_code` 等；
+- 可选：**访问 Internet**（`web_search` / `web_fetch` / `research` 等，默认开启）；
+- 可选：**MCP 调用**（`mcp__*` 工具与 MCP 资源读取，默认开启）。
+
+以下调用直接放行，不请求审查模型：查看项目内普通文件、在项目内写普通源码/数据文件，以及未列出的其他工具。`apply_patch` 可能一次增删改多个路径，无法安全解析，因此始终审查；`plugin_manager`（安装插件可能执行构建脚本）、`create_worktree`（在项目外创建工作树）和 `qqbot_send_file`（向会话发送文件）不携带可解析的单一路径，也始终审查。
+
+两个可选项只在「仅敏感操作」下生效；切回「所有工具调用」时恢复每次调用都审查（原有行为）。默认值是「仅敏感操作」，因此升级后审查次数会明显下降；需要原来的严格行为时把它切回「所有工具调用」。
+
+路径按工具的实际语义解析：相对路径基于会话 `cwd`，`~` 展开到用户目录，符号链接解析到真实目标——项目内的链接指向项目外时仍会被审查；`glob` / `grep` 的 glob 表达式含 `..` 或绝对路径时同样审查。无法解析的审查请求原样交给审查模型（fail-closed），不会因为解析失败而放行。
 
 ## 拒绝原因用中文说明（`chineseReason`）
 
@@ -166,11 +187,12 @@ security-example:
 npm test
 node --check lib/index.js
 node --check lib/review-route.js
+node --check lib/review-scope.js
 node --check lib/review-choice.js
 node --check lib/compat-mode.js
 node --check client.js
 ```
 
-沙箱环境里 `node --test` 会因为没有管道权限而 `spawn EPERM`，此时逐个文件跑：`node test/review-route.test.mjs`、`node test/review-choice.test.mjs`、`node test/compat-mode.test.mjs`。
+沙箱环境里 `node --test` 会因为没有管道权限而 `spawn EPERM`，此时逐个文件跑：`node test/review-route.test.mjs`、`node test/review-scope.test.mjs`、`node test/review-choice.test.mjs`、`node test/compat-mode.test.mjs`。
 
-测试覆盖：普通请求放行、审查请求改写、递归回放、空配置回退、半配置跟随主模型、同路由仍追加中文策略、Qwen3Guard 协议探测、请求改写与字符预算、按消息裁剪（保留环境与待审调用、丢弃最旧历史）、无标签时的固定拒绝文案、自动缩小输入重试、标签映射与流转换；审查闸门三种拒绝形态识别、提问与答案解析、提问失败一律维持拒绝、审查超时合成 `REVIEWER_TIMEOUT` 结束块；兼容模式按开关增删 `compat.supportsStore`、保留其他 `compat` 项且不动更低配置层的值，以及在真实 cordis 中两种加载顺序下都位于闸门外层（找不到宿主 checkout 时该项跳过）。
+测试覆盖：普通请求放行、审查请求改写、递归回放、空配置回退、半配置跟随主模型、同路由仍追加中文策略、Qwen3Guard 协议探测、请求改写与字符预算、按消息裁剪（保留环境与待审调用、丢弃最旧历史）、无标签时的固定拒绝文案、自动缩小输入重试、标签映射与流转换；审查范围对项目内读取/写入放行、项目外访问/修改与配置文件写入审查、命令执行审查、联网与 MCP 开关、符号链接与 glob 逃逸识别、不可解析请求 fail-closed，以及被豁免时返回审查器认识的合成 allow 流；审查闸门三种拒绝形态识别、提问与答案解析、提问失败一律维持拒绝、审查超时合成 `REVIEWER_TIMEOUT` 结束块；兼容模式按开关增删 `compat.supportsStore`、保留其他 `compat` 项且不动更低配置层的值，以及在真实 cordis 中两种加载顺序下都位于闸门外层（找不到宿主 checkout 时该项跳过）。
