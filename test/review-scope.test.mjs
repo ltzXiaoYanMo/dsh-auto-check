@@ -255,10 +255,13 @@ test("classifyToolCall reviews only the sensitive categories", (t) => {
   assert.equal(call("read", { file_path: "src/index.ts" }).review, false);
   assert.equal(call("read", { file_path: "src/index.ts" }).reason, "project-read");
   assert.equal(call("read", { file_path: path.join(root, "src", "index.ts") }).review, false);
-  assert.equal(call("read", { file_path: "..\\outside.txt" }).review, true);
-  assert.equal(call("read", { file_path: "..\\outside.txt" }).reason, "external-read");
+  // Forward slashes are separators on every platform; backslashes only on
+  // Windows (POSIX treats them as filename characters, see the guarded block
+  // further down), so portable assertions must use forward slashes.
+  assert.equal(call("read", { file_path: "../outside.txt" }).review, true);
+  assert.equal(call("read", { file_path: "../outside.txt" }).reason, "external-read");
   assert.equal(call("read", {}).review, true);
-  assert.equal(call("read_image", { file_path: "..\\outside.png" }).review, true);
+  assert.equal(call("read_image", { file_path: "../outside.png" }).review, true);
 
   assert.equal(call("grep", { pattern: "x" }).review, false);
   assert.equal(call("glob", { pattern: "**/*.ts", path: "src" }).review, false);
@@ -280,10 +283,19 @@ test("classifyToolCall reviews only the sensitive categories", (t) => {
   assert.equal(call("write", { file_path: ".env", content: "" }).review, true);
   assert.equal(call("write", { file_path: ".env", content: "" }).reason, "config-write");
   assert.equal(call("write", { file_path: "package.json" }).review, true);
-  assert.equal(call("write", { file_path: "..\\outside.txt" }).review, true);
-  assert.equal(call("write", { file_path: "..\\outside.txt" }).reason, "external-write");
+  assert.equal(call("write", { file_path: "../outside.txt" }).review, true);
+  assert.equal(call("write", { file_path: "../outside.txt" }).reason, "external-write");
   assert.equal(call("write", {}).review, true);
   assert.equal(call("apply_patch", { patch: "*** Begin Patch" }).review, true);
+
+  if (process.platform === "win32") {
+    // Backslash-separated relative paths only escape the project on Windows;
+    // on POSIX `..\outside.txt` is one filename inside the project.
+    assert.equal(call("read", { file_path: "..\\outside.txt" }).review, true);
+    assert.equal(call("read_image", { file_path: "..\\outside.png" }).review, true);
+    assert.equal(call("write", { file_path: "..\\outside.txt" }).review, true);
+    assert.equal(call("write", { file_path: "..\\outside.txt" }).reason, "external-write");
+  }
 
   for (const name of ["plugin_manager", "create_worktree", "qqbot_send_file"]) {
     assert.equal(call(name, {}).review, true, name);
