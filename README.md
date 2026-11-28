@@ -82,7 +82,7 @@
 卡片文案默认中英双语并用「 / 」隔开，因为宿主侧拿不到浏览器的界面语言。插件会按以下顺序尝试把卡片换成单一语言：
 
 1. **DSH 的语言设置**：设置 → 通用 → 语言里选过的 `locale.preference`（通过宿主 settings 服务读取 `locale` 命名空间）。选中文（`zh` / `zh-CN` 等）时整张卡片显示中文；选任何其他语言一律显示英文。
-2. 未显式设置语言时，读取桌面壳的已确认语言缓存（Electron userData 下的 `desktop/locale-cache`，桌面端自动跟随系统语言时也会写入）——同样 `zh*` 显示中文，其余显示英文。
+2. 未显式设置语言时，读取桌面壳的已确认语言缓存（DSH home 下的 `desktop-locale.json`，按 profile 记录语言，桌面端自动跟随系统语言时也会写入；宿主侧不知道 home 具体位置，会依次尝试 `$DSH_HOME`、桌面数据目录指针文件（`%APPDATA%/DSH Desktop Beta/home/` 下的 `desktop-next-last-home.json` / `desktop-next-location.json` 及开发版 `.desktop-next/home`）、`~/.dsh-beta`、`~/.dsh`）——同样 `zh*` 显示中文，其余显示英文。
 3. 两处都读不到（例如 web profile 下宿主不知道浏览器语言）时保持双语，不做猜测。
 
 语言在每次弹卡时重新解析，改完设置立即生效；解析失败也不会影响提问本身（回退双语）。
